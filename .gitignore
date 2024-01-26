@@ -143,4 +143,3 @@ dmypy.json
 # Background pipeline files
 nohup.out
 
-ubna_data_*.csv
