@@ -23,6 +23,35 @@ from cfg import get_config
 from pipeline import pipeline
 from utils.utils import gen_empty_df, convert_df_ravenpro
 
+
+
+FREQ_GROUPS = {
+                'E18 Bridge' : {'': [0, 96000],
+                          'LF1_': [13000, 50000],
+                          'HF1_': [34000, 74000],
+                          'HF2_': [42000, 96000]},
+                'Carp Pond' : {'': [0, 96000],
+                          'LF1_': [13000, 50000],
+                          'HF1_': [34000, 74000],
+                          'HF1_': [42000, 96000]},
+
+                'Foliage' : {'': [0, 96000],
+                          'LF1_': [13000, 50000],
+                          'HF1_': [34000, 74000],
+                          'HF2_': [42000, 96000]},
+
+                'Telephone Field' : {'': [0, 96000],
+                          'LF1_': [13000, 50000],
+                          'HF1_': [30000, 78000],
+                          'HF2_': [41000, 102000]},
+
+                'Central Pond' : {'': [0, 96000],
+                          'LF1_': [13000, 50000],
+                          'HF1_': [34000, 74000],
+                          'HF2_': [42000, 96000]}
+                }
+
+
 def generate_segments(audio_file: Path, output_dir: Path, start_time: float, duration: float):
     """
     Segments audio file into clips of duration length and saves them to output/tmp folder.
@@ -305,50 +334,83 @@ def construct_activity_arr(cfg, data_params):
             - Values are 0 for error-files, 1 for call-absence, number of detections otherwise.
             - Recordings where the Audiomoth experienced errors are colored red.
     """
-    csv_tag = cfg["csv_filename"].split('__')[-1]
 
+    csv_tag = cfg["csv_filename"].split('__')[-1]
     ref_datetimes = pd.to_datetime(data_params['ref_audio_files'], format="%Y%m%d_%H%M%S", exact=False)
     activity_datetimes_for_file = ref_datetimes.tz_localize('UTC')
-
-    dets = pd.read_csv(f'{data_params["output_dir"]}/{cfg["csv_filename"]}.csv')
-    dets['ref_time'] = pd.to_datetime(dets['input_file'], format="%Y%m%d_%H%M%S", exact=False)
-    dets_per_file = dets.groupby(['ref_time'])['ref_time'].count()
     good_datetimes = pd.to_datetime(data_params['good_audio_files'], format="%Y%m%d_%H%M%S", exact=False)
-
     if (cfg['cycle_length'] - cfg['duration']) <= 5:
         nodets = 1
     else:
         nodets = (cfg['duration'])/((data_params['resample_in_min']*60))
-    
-    activity = []
-    for ref_datetime in ref_datetimes:
-        if ref_datetime in good_datetimes:
-            if (ref_datetime in dets_per_file.index):
-                activity += [dets_per_file[ref_datetime]]
-            else:
-                activity += [nodets]
-        else:
-            activity += [0]
-    if (cfg['cycle_length'] - cfg['duration']) <= 5:
-        activity = np.array(activity)
-    else:
-        activity = np.array(activity) * (cfg['cycle_length'] / cfg['duration'])
 
-    activity_arr = pd.DataFrame(list(zip(activity_datetimes_for_file, activity)), columns=["date_and_time_UTC", "num_of_detections"])
+    dets = pd.read_csv(f'{data_params["output_dir"]}/{cfg["csv_filename"]}.csv')
+    dets['ref_time'] = pd.to_datetime(dets['input_file'], format="%Y%m%d_%H%M%S", exact=False)
+    activity_dets_arr = pd.DataFrame()
+    groups_in_site = FREQ_GROUPS[cfg['site']]
 
+    group = ''
+    all_condition = (dets['low_freq']>=groups_in_site[group][0])&(dets['high_freq']<=groups_in_site[group][1])
+    freq_group_df = dets.loc[all_condition].copy()
+    dets_per_file = freq_group_df.groupby(['ref_time'])['ref_time'].count()
+    activity = dets_per_file.reindex(good_datetimes, fill_value=nodets).reindex(ref_datetimes, fill_value=0)
 
-    activity_arr.to_csv(f"{data_params['output_dir']}/activity__{csv_tag}.csv")
-
-    return activity_arr
+    if (cfg['cycle_length'] - cfg['duration']) > 5:
+        activity = activity *(cfg['cycle_length'] / cfg['duration'])
+    activity_arr = pd.DataFrame(list(zip(activity_datetimes_for_file, activity)), columns=["date_and_time_UTC", f"{group}num_of_detections"])
+    activity_arr = activity_arr.set_index("date_and_time_UTC")
+    activity_dets_arr = pd.concat([activity_dets_arr, activity_arr], axis=1)
 
 
-def shape_activity_array_into_grid(cfg, data_params):
+    group = 'HF2_'
+    hf2_condition = (dets['low_freq']>=groups_in_site[group][0])&(dets['high_freq']<=groups_in_site[group][1])
+    freq_group_df = dets.loc[hf2_condition].copy()
+    dets_per_file = freq_group_df.groupby(['ref_time'])['ref_time'].count()
+    activity = dets_per_file.reindex(good_datetimes, fill_value=nodets).reindex(ref_datetimes, fill_value=0)
+
+    if (cfg['cycle_length'] - cfg['duration']) > 5:
+        activity = activity *(cfg['cycle_length'] / cfg['duration'])
+    activity_arr = pd.DataFrame(list(zip(activity_datetimes_for_file, activity)), columns=["date_and_time_UTC", f"{group}num_of_detections"])
+    activity_arr = activity_arr.set_index("date_and_time_UTC")
+    activity_dets_arr = pd.concat([activity_dets_arr, activity_arr], axis=1)
+
+
+    group = 'HF1_'
+    hf1_condition = (dets['low_freq']>=groups_in_site[group][0])&(dets['high_freq']<=groups_in_site[group][1])
+    freq_group_df = dets.loc[hf1_condition&(~hf2_condition)].copy()
+    dets_per_file = freq_group_df.groupby(['ref_time'])['ref_time'].count()
+    activity = dets_per_file.reindex(good_datetimes, fill_value=nodets).reindex(ref_datetimes, fill_value=0)
+
+    if (cfg['cycle_length'] - cfg['duration']) > 5:
+        activity = activity *(cfg['cycle_length'] / cfg['duration'])
+    activity_arr = pd.DataFrame(list(zip(activity_datetimes_for_file, activity)), columns=["date_and_time_UTC", f"{group}num_of_detections"])
+    activity_arr = activity_arr.set_index("date_and_time_UTC")
+    activity_dets_arr = pd.concat([activity_dets_arr, activity_arr], axis=1)
+
+
+    group = 'LF1_'
+    lf1_condition = (dets['low_freq']>=groups_in_site[group][0])&(dets['high_freq']<=groups_in_site[group][1])
+    freq_group_df = dets.loc[lf1_condition&(~hf1_condition)&(~hf2_condition)].copy()
+    dets_per_file = freq_group_df.groupby(['ref_time'])['ref_time'].count()
+    activity = dets_per_file.reindex(good_datetimes, fill_value=nodets).reindex(ref_datetimes, fill_value=0)
+
+    if (cfg['cycle_length'] - cfg['duration']) > 5:
+        activity = activity *(cfg['cycle_length'] / cfg['duration'])
+    activity_arr = pd.DataFrame(list(zip(activity_datetimes_for_file, activity)), columns=["date_and_time_UTC", f"{group}num_of_detections"])
+    activity_arr = activity_arr.set_index("date_and_time_UTC")
+    activity_dets_arr = pd.concat([activity_dets_arr, activity_arr], axis=1)
+
+    activity_dets_arr.to_csv(f"{data_params['output_dir']}/activity__{csv_tag}.csv")
+
+    return activity_dets_arr
+
+
+def shape_activity_array_into_grid(cfg, data_params, group):
 
     csv_tag = cfg['csv_filename'].split('__')[-1]
 
     num_dets = pd.read_csv(f"{data_params['output_dir']}/activity__{csv_tag}.csv", index_col=0)
-    num_dets['date_and_time_UTC'] = pd.DatetimeIndex(num_dets['date_and_time_UTC'])
-    num_dets.set_index('date_and_time_UTC', inplace=True)
+    num_dets.index = pd.DatetimeIndex(num_dets.index)
 
     resampled_df = num_dets.resample(data_params["resample_tag"]).sum().between_time(cfg['recording_start'], cfg['recording_end'], inclusive='left')
 
@@ -356,17 +418,17 @@ def shape_activity_array_into_grid(cfg, data_params):
     raw_dates = activity_datetimes.date
     raw_times = activity_datetimes.strftime("%H:%M")
 
-    col_name = f"num_of_detections"
+    col_name = f"{group}num_of_detections"
     data = list(zip(raw_dates, raw_times, resampled_df[col_name]))
     activity = pd.DataFrame(data, columns=["Date (UTC)", "Time (UTC)", col_name])
     activity_df = activity.pivot(index="Time (UTC)", columns="Date (UTC)", values=col_name)
     activity_df.columns = pd.to_datetime(activity_df.columns).strftime('%m/%d/%y')
-    activity_df.to_csv(f"{data_params['output_dir']}/activity_plot__{csv_tag}.csv")
+    activity_df.to_csv(f"{data_params['output_dir']}/activity_plot__{group}{csv_tag}.csv")
 
     return activity_df
 
 
-def plot_activity_grid(plot_df, data_params, show_PST=False, save=True):
+def plot_activity_grid(plot_df, data_params, group, show_PST=False, save=True):
     """
     Plots the above-returned plot_df DataFrame that represents activity over a deployment session.
 
@@ -389,6 +451,9 @@ def plot_activity_grid(plot_df, data_params, show_PST=False, save=True):
         - For example, today's 03:00 UTC will become yesterday's 20:00 PST (-7 hrs)
     """
 
+    plot_title = group
+    if plot_title!='':
+        plot_title = group.upper().replace('_', ' ')
     masked_array_for_nodets = np.ma.masked_where(plot_df.values==0, plot_df.values)
     cmap = plt.get_cmap('viridis')
     cmap.set_bad(color='red', alpha=1.0)
@@ -399,7 +464,7 @@ def plot_activity_grid(plot_df, data_params, show_PST=False, save=True):
 
     plt.rcParams.update({'font.size': 16})
     plt.figure(figsize=(12, 8))
-    plt.title(f"Activity from {data_params['site']}", loc='left', y=1.05)
+    plt.title(f"{plot_title}Activity from {data_params['site']}", loc='left', y=1.05)
     plt.imshow(masked_array_for_nodets, cmap=cmap, norm=colors.LogNorm(vmin=1, vmax=10e3))
     plt.yticks(np.arange(0, len(plot_df.index))-0.5, plot_times, rotation=45)
     plt.xticks(np.arange(0, len(plot_df.columns))-0.5, plot_dates, rotation=45)
@@ -410,11 +475,11 @@ def plot_activity_grid(plot_df, data_params, show_PST=False, save=True):
     plt.xlabel('Date (MM/DD/YY)')
     plt.colorbar()
     if save:
-        plt.savefig(f"{data_params['output_dir']}/activity_plot__{data_params['recover_folder']}_{data_params['audiomoth_folder']}.png", bbox_inches='tight', pad_inches=0.5)
+        plt.savefig(f"{data_params['output_dir']}/activity_plot__{group}{data_params['recover_folder']}_{data_params['audiomoth_folder']}.png", bbox_inches='tight', pad_inches=0.5)
     plt.tight_layout()
     plt.show()
 
-def construct_cumulative_activity(data_params, cfg):
+def construct_cumulative_activity(data_params, cfg, group):
     """
     Constructs a cumulative appended DataFrame grid using dask.dataframe.
     This DataFrame gathers all detected activity contained in output_dir for a given site.
@@ -440,23 +505,22 @@ def construct_cumulative_activity(data_params, cfg):
 
     new_df = dd.read_csv(f"{Path(__file__).parent}/../output_dir/recover-202[3|4]*/{data_params['site']}/activity__*.csv", assume_missing=True).compute()
     new_df["date_and_time_UTC"] = pd.to_datetime(new_df["date_and_time_UTC"], format="%Y-%m-%d %H:%M:%S%z")
-    new_df.pop(new_df.columns[0])
 
     resampled_df = new_df.resample(data_params["resample_tag"], on="date_and_time_UTC").sum().between_time(cfg['recording_start'], cfg['recording_end'], inclusive='left')
 
     activity_datetimes = pd.to_datetime(resampled_df.index.values)
     raw_dates = activity_datetimes.date
     raw_times = activity_datetimes.strftime("%H:%M")
-    data = list(zip(raw_dates, raw_times, resampled_df['num_of_detections']))
-    activity = pd.DataFrame(data, columns=["Date (UTC)", "Time (UTC)", 'num_of_detections'])
-    activity_df = activity.pivot(index="Time (UTC)", columns="Date (UTC)", values='num_of_detections')
+    data = list(zip(raw_dates, raw_times, resampled_df[f'{group}num_of_detections']))
+    activity = pd.DataFrame(data, columns=["Date (UTC)", "Time (UTC)", f'{group}num_of_detections'])
+    activity_df = activity.pivot(index="Time (UTC)", columns="Date (UTC)", values=f'{group}num_of_detections')
     activity_df.columns = pd.to_datetime(activity_df.columns).strftime('%m/%d/%y')
     cum_plots_dir = f'{Path(__file__).parent}/../output_dir/cumulative_plots/'
-    activity_df.to_csv(f'{cum_plots_dir}/cumulative_activity__{data_params["site"].split()[0]}_{data_params["resample_tag"]}.csv')
+    activity_df.to_csv(f'{cum_plots_dir}/cumulative_activity__{group}{data_params["site"].split()[0]}_{data_params["resample_tag"]}.csv')
 
     return activity_df
 
-def plot_cumulative_activity(activity_df, data_params):
+def plot_cumulative_activity(activity_df, data_params, group):
     """
     Plots the cumulative appended DataFrame grid of all detected activity a given site.
 
@@ -474,27 +538,38 @@ def plot_cumulative_activity(activity_df, data_params):
         - The resample_tag associated with resampling: choose above 30T like 1H, 2H or D.
     """
 
+    plot_title = group
+    if plot_title!='':
+        plot_title = group.upper().replace('_', ' ')
     masked_array_for_nodets = np.ma.masked_where(activity_df.values==0, activity_df.values)
+
+    activity_times = pd.DatetimeIndex(activity_df.index).tz_localize('UTC')
+    ylabel = 'UTC'
+    if data_params["show_PST"]:
+        activity_times = activity_times.tz_convert(tz='US/Pacific')
+        ylabel = 'PST'
+    activity_times = activity_times.strftime("%H:%M")
+
     cmap = plt.get_cmap('viridis')
     cmap.set_bad(color='red')
     plot_dates = [''] * len(activity_df.columns)
     plot_dates[::7] = activity_df.columns[::7]
-    plot_times = [''] * len(activity_df.index)
-    plot_times[::3] = activity_df.index[::3]
+    plot_times = [''] * len(activity_times)
+    plot_times[::3] = activity_times[::3]
 
     plt.rcParams.update({'font.size': 2*len(plot_dates)**0.5})
     plt.figure(figsize=(len(plot_dates)/4, len(plot_times)/4))
-    plt.title(f"Activity from {data_params['site']}", loc='center', y=1.05, fontsize=(4)*len(plot_dates)**0.5)
+    plt.title(f"{plot_title}Activity (# of calls) from {data_params['site']}", loc='center', y=1.05, fontsize=(3)*len(plot_dates)**0.5)
     plt.imshow(masked_array_for_nodets, cmap=cmap, norm=colors.LogNorm(vmin=1, vmax=10e3))
     plt.yticks(np.arange(0, len(plot_times))-0.5, plot_times, rotation=30)
     plt.xticks(np.arange(0, len(plot_dates))-0.5, plot_dates, rotation=30)
-    plt.ylabel('UTC Time (HH:MM)')
+    plt.ylabel(f'{ylabel} Time (HH:MM)')
     plt.xlabel('Date (MM/DD/YY)')
     plt.colorbar()
     plt.grid(which='both')
     plt.tight_layout()
     cum_plots_dir = f'{Path(__file__).parent}/../output_dir/cumulative_plots'
-    plt.savefig(f'{cum_plots_dir}/cumulative_activity__{data_params["site"].split()[0]}_{data_params["resample_tag"]}.png', 
+    plt.savefig(f'{cum_plots_dir}/cumulative_activity__{group}{data_params["site"].split()[0]}_{data_params["resample_tag"]}.png', 
                 bbox_inches='tight')
     plt.show()
 
@@ -548,7 +623,7 @@ def run_pipeline_for_individual_files_with_df(cfg):
         for file in data_params['good_audio_files']:
             cfg["csv_filename"] = f"bd2__{data_params['site'].split()[0]}_{file.name.split('.')[0]}"
             if cfg['skip_existing'] & (data_params['output_dir'] / f"{cfg['csv_filename']}.csv").is_file():
-                print('Detections for this file have already been generated!')
+                print(f'Detections for this {file.name} have already been generated!')
             else:
                 print(f"Generating detections for {file.name}")
                 recover_folder = good_location_df.loc[good_location_df['file_path'] == str(file), 'recover_folder'].values[0]
@@ -646,11 +721,13 @@ def run_pipeline_for_session_with_df(cfg):
         data_params['resample_in_min'] = 30
         data_params['resample_tag'] = f"{data_params['resample_in_min']}T"
         construct_activity_arr(cfg, data_params)
-        activity_df = shape_activity_array_into_grid(cfg, data_params)
-        plot_activity_grid(activity_df, data_params, save=True)
-        if data_params["site"] != "(Site not found in Field Records)":
-            cumulative_activity_df = construct_cumulative_activity(data_params, cfg)
-            plot_cumulative_activity(cumulative_activity_df, data_params)
+        for group in FREQ_GROUPS[cfg['site']].keys():
+            activity_df = shape_activity_array_into_grid(cfg, data_params, group)
+            plot_activity_grid(activity_df, data_params, group, save=True)
+            if data_params["site"] != "(Site not found in Field Records)":
+                cumulative_activity_df = construct_cumulative_activity(data_params, cfg, group)
+                data_params['show_PST'] = False
+                plot_cumulative_activity(cumulative_activity_df, data_params, group)
 
     return bd_preds
 
